@@ -64,6 +64,13 @@
     .ignored strong { color: #9a6a1c; }
     details { margin-top: 8px; }
     summary { cursor: pointer; font-size: 12px; color: var(--blue); }
+    .success { background: var(--green-bg); color: var(--green-fg); border: 1px solid #b7e0c2;
+               border-radius: 8px; padding: 12px 16px; margin-bottom: 18px; font-size: 14px; }
+    .btn-reset { background: #fff4f4; color: var(--red-fg); border: 1px solid #f3c2c2;
+                 margin-top: 8px; }
+    .muted-card { background: #fafbfd; }
+    .state-empty { color: var(--muted); font-size: 13px; }
+    .mono { font-family: ui-monospace, monospace; }
   </style>
 </head>
 <body>
@@ -116,12 +123,57 @@
       <div class="hint">样例由 Docker 镜像内 samples/ 目录提供，点击即调用后端 API 完成分析。</div>
     </section>
 
+    <section class="card" id="backfill">
+      <h2>3. 订单日汇总补传（回退核查补传入口）</h2>
+      <div class="hint" style="margin-bottom:10px">
+        限同一张从版本 0 启用 CDF 的表：无分区、无列映射、无删除向量。
+        每行一单，非空列为 <code>order_day</code>（YYYY-MM-DD 字符串）与
+        <code>amount_cents</code>（int64）。每次补传一版：一个 JSON 提交
+        （20 位补零版本号 NNN.json）+ 一个按<strong>表内相对路径</strong>打包的
+        Parquet ZIP。有 <code>cdc</code> 动作时只读 CDC（insert / update_postimage
+        计入，delete / update_preimage 扣减）；否则只读 dataChange=true 的
+        add / remove，分别加、减。空库从 v0 收起，只收下一版，无变更也推进版号。
+      </div>
+
+      {% if backfill_error %}<div class="error">❌ {{ backfill_error }}<br>
+        <span class="hint">数据库与已提交汇总均未改变。</span></div>{% endif %}
+      {% if backfill_success %}
+      <div class="success">✅ 已提交 v{{ backfill_success.version }}
+        （{{ 'CDC 模式' if backfill_success.mode == 'cdc' else 'add/remove 模式' }}
+        {% if backfill_success.no_change %}，本版无数据变化，版号照常推进{% endif %}）：
+        读取文件 {{ backfill_success.files_read | join('、') if backfill_success.files_read else '无' }}
+      </div>
+      {% endif %}
+
+      <form method="post" action="/backfill" enctype="multipart/form-data" id="backfill-form">
+        <label for="commit_file">Delta Lake JSON 提交（单个，如 00000000000000000003.json）</label>
+        <input type="file" id="commit_file" name="commit_file" accept=".json" required>
+        <label for="parquet_zip">Parquet ZIP（按表内路径打包，如 data/part-00000-….parquet）</label>
+        <input type="file" id="parquet_zip" name="parquet_zip" accept=".zip" required>
+        <div class="hint">缺件或坏数据会指出具体文件名，整版拒绝且不改动已提交状态。</div>
+        <button class="btn-primary" type="submit" id="backfill-btn">补传这一版</button>
+      </form>
+
+      <div style="margin-top:16px">
+        <button class="btn-sample" id="bf-sample-btn">用本地样例补传下一版（跨日更正）</button>
+        <button class="btn-reset" id="bf-reset-btn">重置补传库（演示用）</button>
+      </div>
+      <div class="hint">样例共 v0–v4：v1 普通新增、v2 跨日更正（删 2026-11-01 一单、补 2026-11-02 一单）、
+        v3 无变更提交（版号仍推进）、v4 再新增。重置后从 v0 逐版点击即可。</div>
+    </section>
+
+    <section class="card muted-card" id="backfill-state-card">
+      <h2>当前已提交补传状态</h2>
+      <div id="backfill-state-root"></div>
+    </section>
+
     <section id="report-root"></section>
   </main>
 
   {% if report %}
   <script type="application/json" id="report-data">{{ report | tojson }}</script>
   {% endif %}
+  <script type="application/json" id="backfill-data">{{ backfill_state | tojson }}</script>
   <script>
     const STATUS_TEXT = {
       recoverable: "可重建 · 文件齐全",
@@ -236,6 +288,101 @@
           btn.disabled = false;
         }
       });
+    });
+
+    // ---------------- 订单日汇总补传 ----------------
+    function renderBackfillState(state) {
+      const root = document.getElementById('backfill-state-root');
+      if (state.last_version === null) {
+        root.innerHTML = '<div class="state-empty">补传库为空：请先补传版本 0 的建表提交。</div>';
+        return;
+      }
+      const totalCount = state.daily.reduce((s, d) => s + d.order_count, 0);
+      const totalAmount = state.daily.reduce((s, d) => s + d.amount_total_cents, 0);
+      const dailyRows = state.daily.length ? state.daily.map(d =>
+        '<tr><td class="mono">' + esc(d.order_day) + '</td>' +
+        '<td>' + d.order_count + '</td>' +
+        '<td class="mono">' + d.amount_total_cents.toLocaleString() + '</td></tr>'
+      ).join('') : '<tr><td colspan="3" class="state-empty">当前各日汇总均为零</td></tr>';
+      const verChips = state.versions.map(v =>
+        '<span class="chip">v' + v.version + ' · ' +
+        (v.mode === 'cdc' ? 'CDC' : 'add/remove') +
+        (v.no_change ? ' · 无变更' : '') + '</span>'
+      ).join('');
+      root.innerHTML =
+        '<div class="summary" style="margin-bottom:14px">' +
+          '<div class="stat"><div class="num">v' + esc(state.last_version) +
+            '</div><div class="lbl">最新已提交版号（共 ' + state.versions.length + ' 版）</div></div>' +
+          '<div class="stat"><div class="num">' + totalCount +
+            '</div><div class="lbl">全表单量合计（单）</div></div>' +
+          '<div class="stat"><div class="num mono">' + totalAmount.toLocaleString() +
+            '</div><div class="lbl">全表分币合计（分）</div></div>' +
+        '</div>' +
+        '<table><thead><tr><th>order_day</th><th>单量</th><th>分币合计</th></tr></thead>' +
+        '<tbody>' + dailyRows + '</tbody></table>' +
+        '<div class="kv" style="margin-top:10px">已提交版号：</div>' +
+        '<div class="chips">' + verChips + '</div>';
+    }
+
+    function showBackfillError(msg) {
+      const card = document.getElementById('backfill');
+      let box = card.querySelector('.error');
+      if (!box) {
+        box = document.createElement('div');
+        box.className = 'error';
+        card.insertBefore(box, card.querySelector('#backfill-form'));
+      }
+      box.textContent = '❌ ' + msg + ' 数据库与已提交汇总均未改变。';
+      window.scrollTo({top: card.offsetTop - 12, behavior: 'smooth'});
+    }
+
+    const initialBackfill = JSON.parse(
+      document.getElementById('backfill-data').textContent);
+    renderBackfillState(initialBackfill);
+
+    document.getElementById('backfill-form').addEventListener('submit', () => {
+      const btn = document.getElementById('backfill-btn');
+      btn.disabled = true;
+      btn.textContent = '补传提交中…';
+    });
+
+    document.getElementById('bf-sample-btn').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        const stateResp = await fetch('/api/backfill/state');
+        const state = await stateResp.json();
+        const next = state.last_version === null ? 0 : state.last_version + 1;
+        const resp = await fetch('/api/backfill/sample/' + next, {method: 'POST'});
+        const data = await resp.json();
+        if (!resp.ok) {
+          showBackfillError(data.error || '样例补传失败');
+          return;
+        }
+        renderBackfillState(data.state);
+        window.scrollTo({
+          top: document.getElementById('backfill-state-card').offsetTop - 12,
+          behavior: 'smooth'});
+      } catch (e) {
+        showBackfillError('请求样例补传接口失败：' + e);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('bf-reset-btn').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        const resp = await fetch('/api/backfill/reset', {method: 'POST'});
+        const state = await resp.json();
+        if (!resp.ok) { showBackfillError(state.error || '重置失败'); return; }
+        renderBackfillState(state);
+      } catch (e) {
+        showBackfillError('请求重置接口失败：' + e);
+      } finally {
+        btn.disabled = false;
+      }
     });
   </script>
 </body>

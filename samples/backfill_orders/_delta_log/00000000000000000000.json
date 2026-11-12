@@ -1,0 +1,3 @@
+{"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}
+{"metadata": {"id": "backfill-orders-sample-id", "name": "backfill_orders", "description": "订单日汇总补传样例：v0 起启用 CDF，无分区/列映射/删除向量", "format": {"provider": "parquet", "options": {}}, "schemaString": "{\"type\": \"struct\", \"fields\": [{\"name\": \"order_day\", \"type\": \"string\", \"nullable\": false, \"metadata\": {}}, {\"name\": \"amount_cents\", \"type\": \"long\", \"nullable\": false, \"metadata\": {}}]}", "partitionColumns": [], "configuration": {"delta.enableChangeDataFeed": "true"}, "createdTime": 1700000000000}}
+{"add": {"path": "data/part-00000-orders.parquet", "partitionValues": {}, "size": 1024, "modificationTime": 1700000000000, "dataChange": true}}

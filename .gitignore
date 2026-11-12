@@ -3,3 +3,11 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# 补传 SQLite 库及 WAL 临时文件（容器内 /srv/data，宿主挂载点 ./data）
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm

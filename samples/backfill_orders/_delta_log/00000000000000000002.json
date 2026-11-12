@@ -1,0 +1,3 @@
+{"remove": {"path": "data/part-00001-orders.parquet", "deletionTimestamp": 1700000100000, "dataChange": true}}
+{"add": {"path": "data/part-00002-orders.parquet", "partitionValues": {}, "size": 1024, "modificationTime": 1700000000000, "dataChange": true}}
+{"cdc": {"path": "_change_data/cdc-00002.parquet", "partitionValues": {}, "dataChange": true, "size": 1024}}

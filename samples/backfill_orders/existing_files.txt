@@ -1,0 +1,4 @@
+# backfill_orders 现存数据文件表内相对路径清单
+data/part-00000-orders.parquet
+data/part-00002-orders.parquet
+data/part-00004-orders.parquet
